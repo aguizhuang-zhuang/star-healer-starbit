@@ -19,10 +19,27 @@
   /* 手机端触屏控制 */
   #touchUI { position:absolute; inset:0; pointer-events:none; z-index:5; display:none; }
   body.touch #touchUI { display:block; }
-  #joystick { position:absolute; left:22px; bottom:26px; width:124px; height:124px; border-radius:62px; background:rgba(0,229,255,.10); border:2px solid rgba(0,229,255,.35); pointer-events:auto; touch-action:none; }
-  #knob { position:absolute; left:50%; top:50%; width:54px; height:54px; margin:-27px 0 0 -27px; border-radius:27px; background:radial-gradient(circle at 40% 35%, #6ff4ff, #4B2D8B); box-shadow:0 0 14px rgba(0,229,255,.6); }
-  #actionBtn { position:absolute; right:30px; bottom:42px; width:88px; height:88px; border-radius:44px; background:linear-gradient(135deg,#FF2D78,#FFD740); border:none; color:#0c0c1a; font-size:15px; font-weight:bold; line-height:1.2; pointer-events:auto; touch-action:none; box-shadow:0 4px 18px rgba(255,45,120,.5); user-select:none; }
-  #actionBtn:active { transform:scale(.92); filter:brightness(1.1); }
+  #joystick { position:absolute; width:140px; height:140px; margin:-70px 0 0 -70px; border-radius:50%;
+    background: radial-gradient(circle, rgba(0,229,255,.20), rgba(75,45,139,.10) 68%, rgba(75,45,139,0) 100%);
+    border:2px solid rgba(0,229,255,.5);
+    box-shadow: 0 0 24px rgba(0,229,255,.35), inset 0 0 20px rgba(0,229,255,.16);
+    pointer-events:none; opacity:0; transform:scale(.7); transition: opacity .12s ease, transform .12s ease; }
+  #joystick.on { opacity:1; transform:scale(1); }
+  #knob { position:absolute; left:50%; top:50%; width:58px; height:58px; margin:-29px 0 0 -29px; border-radius:50%;
+    background: radial-gradient(circle at 38% 32%, #9bf8ff, #4B2D8B 76%);
+    box-shadow: 0 0 20px rgba(0,229,255,.85), 0 0 7px rgba(255,45,120,.5);
+    will-change: transform; }
+  #actionBtn { position:absolute; right:30px; bottom:46px; width:98px; height:98px; border-radius:50%;
+    background: linear-gradient(135deg,#FF2D78,#FFD740); border:2px solid rgba(255,255,255,.6);
+    color:#1a0a2e; font-size:15px; font-weight:bold; line-height:1.25; pointer-events:auto; touch-action:none;
+    box-shadow:0 6px 20px rgba(255,45,120,.5); user-select:none; -webkit-tap-highlight-color:transparent;
+    transition: transform .08s ease, box-shadow .25s ease; }
+  #actionBtn:active, #actionBtn.pressed { transform:scale(.9); filter:brightness(1.12); }
+  #actionBtn.hint { animation: abtnPulse 1.1s ease-in-out infinite; }
+  @keyframes abtnPulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,45,120,.55), 0 6px 20px rgba(255,45,120,.5); }
+    50% { box-shadow: 0 0 0 18px rgba(255,45,120,0), 0 6px 30px rgba(255,215,64,.75); }
+  }
   #touchHint { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:rgba(245,240,255,.65); font-size:13px; text-align:center; pointer-events:none; display:none; }
   body.touch #touchHint.show { display:block; }
   /* 开始遮罩：保证一定能点进去 */
@@ -162,16 +179,21 @@ canvas.addEventListener('mousedown', e => {
 });
 const mouse = { x:0, y:0, clicked:false };
 
-/* ---------- 触屏输入（手机端） ---------- */
+/* ---------- 触屏输入（手机端 · 浮动摇杆） ---------- */
 const touch = {
   active: false,        // 摇杆是否在用
-  ax: 0, ay: 0,         // 归一化方向向量 (-1..1)
-  baseX: 0, baseY: 0,   // 摇杆基准点
-  knobX: 0, knobY: 0,   // 摇杆当前点
-  confirm: false,       // 吸收按钮（一次性）
+  id: null,             // 当前操控摇杆的手指 identifier
+  ax: 0, ay: 0,         // 平滑后的归一化方向向量（-1..1，长度=推力大小）
+  tAx: 0, tAy: 0,       // 手指实时目标方向
+  knobX: 0, knobY: 0,   // 平滑后的摇杆头偏移
+  tKx: 0, tKy: 0,       // 摇杆头目标偏移
+  baseX: 0, baseY: 0,   // 摇杆底座中心（落指处）
+  confirm: false,
   confirmHeld: false,   // 吸收按钮是否按住（长按型）
   isTouch: ('ontouchstart' in window) || navigator.maxTouchPoints > 0
 };
+const JOY_MAX = 62;   // 摇杆最大半径(px)
+const JOY_DEAD = 14;  // 死区(px)
 function touchConfirm(){
   if(!game) return;
   if(game.state==='title' || game.state==='diary' || game.state==='cutscene'){
@@ -184,52 +206,82 @@ function touchHold(on){ touch.confirmHeld = on; }
 
 // 摇杆 UI 元素（由 index.html 提供）
 let joystickEl, knobEl, actionEl;
+function showJoystick(x,y){
+  if(!joystickEl) return;
+  joystickEl.style.left = x+'px';
+  joystickEl.style.top = y+'px';
+  joystickEl.classList.add('on');
+  touch.knobX = 0; touch.knobY = 0;        // 落指瞬间摇杆头归位中心
+  if(knobEl) knobEl.style.transform = 'translate(0,0)';
+}
+function hideJoystick(){
+  if(!joystickEl) return;
+  joystickEl.classList.remove('on');
+}
+function joyStart(x,y,id){
+  touch.baseX = x; touch.baseY = y;
+  touch.active = true; touch.id = id;
+  showJoystick(x,y);
+  joyMove(x,y);
+}
+function joyMove(x,y){
+  let dx = x - touch.baseX, dy = y - touch.baseY;
+  const len = Math.hypot(dx,dy) || 1;
+  if(len < JOY_DEAD){ touch.tAx=0; touch.tAy=0; touch.tKx=0; touch.tKy=0; return; }
+  const cl = Math.min(len, JOY_MAX);
+  const ux = dx/len, uy = dy/len;
+  touch.tKx = ux*cl; touch.tKy = uy*cl;
+  touch.tAx = ux*cl/JOY_MAX; touch.tAy = uy*cl/JOY_MAX;
+}
+function joyEnd(){
+  touch.active = false; touch.id = null;
+  touch.tAx = touch.tAy = touch.tKx = touch.tKy = 0;
+  hideJoystick();
+}
+
 function setupTouchUI(){
   joystickEl = document.getElementById('joystick');
   knobEl = document.getElementById('knob');
   actionEl = document.getElementById('actionBtn');
-  if(!joystickEl) return;
 
-  const R = 56; // 摇杆半径
-  function startJoy(e){
-    e.preventDefault();
-    const r = joystickEl.getBoundingClientRect();
-    touch.baseX = r.left + r.width/2;
-    touch.baseY = r.top + r.height/2;
-    touch.active = true;
-    moveJoy(e.touches[0]);
+  // 画布触摸层：游戏中任意落指即生成浮动摇杆；标题/过场/日记页任意点击推进
+  if(canvas){
+    canvas.addEventListener('touchstart', e=>{
+      e.preventDefault();
+      Audio2.init();
+      const st = game ? game.state : 'title';
+      if(st !== 'play'){
+        if(st==='title'||st==='diary'||st==='cutscene') touchConfirm();
+        return;
+      }
+      for(const t of e.changedTouches){
+        // 避免与右下吸收按钮区域冲突
+        if(actionEl){
+          const r = actionEl.getBoundingClientRect();
+          if(t.clientX>=r.left && t.clientX<=r.right && t.clientY>=r.top && t.clientY<=r.bottom) continue;
+        }
+        joyStart(t.clientX, t.clientY, t.identifier);
+      }
+    }, {passive:false});
+    canvas.addEventListener('touchmove', e=>{
+      e.preventDefault();
+      if(!touch.active) return;
+      for(const t of e.changedTouches){ if(t.identifier===touch.id) joyMove(t.clientX, t.clientY); }
+    }, {passive:false});
+    const endTouch = e=>{
+      e.preventDefault();
+      for(const t of e.changedTouches){ if(t.identifier===touch.id) joyEnd(); }
+    };
+    canvas.addEventListener('touchend', endTouch, {passive:false});
+    canvas.addEventListener('touchcancel', endTouch, {passive:false});
   }
-  function moveJoy(t){
-    let dx = t.clientX - touch.baseX;
-    let dy = t.clientY - touch.baseY;
-    const len = Math.hypot(dx, dy) || 1;
-    const cl = Math.min(len, R);
-    dx = dx/len*cl; dy = dy/len*cl;
-    touch.ax = dx/R; touch.ay = dy/R;
-    if(knobEl) knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
-  }
-  function endJoy(){
-    touch.active = false; touch.ax = 0; touch.ay = 0;
-    if(knobEl) knobEl.style.transform = 'translate(0,0)';
-  }
-  joystickEl.addEventListener('touchstart', startJoy, {passive:false});
-  joystickEl.addEventListener('touchmove', e=>{ e.preventDefault(); moveJoy(e.touches[0]); }, {passive:false});
-  joystickEl.addEventListener('touchend', e=>{ e.preventDefault(); endJoy(); }, {passive:false});
-  joystickEl.addEventListener('touchcancel', endJoy, {passive:false});
 
   if(actionEl){
-    actionEl.addEventListener('touchstart', e=>{ e.preventDefault(); touchConfirm(); touchHold(true); }, {passive:false});
-    actionEl.addEventListener('touchend', e=>{ e.preventDefault(); touchHold(false); }, {passive:false});
-    actionEl.addEventListener('touchcancel', e=>{ e.preventDefault(); touchHold(false); }, {passive:false});
+    actionEl.addEventListener('touchstart', e=>{ e.preventDefault(); touchConfirm(); touchHold(true); actionEl.classList.add('pressed'); }, {passive:false});
+    const up = e=>{ e.preventDefault(); touchHold(false); actionEl.classList.remove('pressed'); };
+    actionEl.addEventListener('touchend', up, {passive:false});
+    actionEl.addEventListener('touchcancel', up, {passive:false});
   }
-
-  // 非 UI 区域点击（标题/过场/日记 推进）
-  canvas.addEventListener('touchstart', e=>{
-    Audio2.init();
-    if(game && (game.state==='title'||game.state==='diary'||game.state==='cutscene')){
-      touchConfirm();
-    }
-  }, {passive:true});
 }
 
 
@@ -493,20 +545,38 @@ function update(dt){
 }
 
 function updatePlay(dt, freeRoam){
+  // 触屏摇杆平滑（回弹 / 去抖）：落指与松手都有顺滑过渡
+  if(touch.isTouch){
+    const k = Math.min(1, dt*20);
+    const tx = touch.active ? touch.tAx : 0, ty = touch.active ? touch.tAy : 0;
+    touch.ax += (tx - touch.ax)*k;
+    touch.ay += (ty - touch.ay)*k;
+    const kx = touch.active ? touch.tKx : 0, ky = touch.active ? touch.tKy : 0;
+    touch.knobX += (kx - touch.knobX)*k;
+    touch.knobY += (ky - touch.knobY)*k;
+    if(knobEl) knobEl.style.transform = `translate(${touch.knobX}px, ${touch.knobY}px)`;
+  }
+
   // 移动
   let ax = 0, ay = 0;
   if(keys['a']||keys['arrowleft']) ax -= 1;
   if(keys['d']||keys['arrowright']) ax += 1;
   if(keys['w']||keys['arrowup']) ay -= 1;
   if(keys['s']||keys['arrowdown']) ay += 1;
-  // 触屏摇杆
-  if(touch.active){ ax += touch.ax; ay += touch.ay; }
-  const len = Math.hypot(ax, ay);
-  if(len>0){ ax/=len; ay/=len; starbit.walk = Math.min(1, starbit.walk+dt*4); }
-  else starbit.walk = Math.max(0, starbit.walk - dt*4);
+  // 触屏：直接取带推力大小的向量（推得越远越快）
+  if(touch.active){ ax = touch.ax; ay = touch.ay; }
 
-  const speed = 230;
-  starbit.vx = ax*speed; starbit.vy = ay*speed;
+  const dirLen = Math.hypot(ax, ay);
+  if(dirLen > 0){
+    const ux = ax/dirLen, uy = ay/dirLen;
+    const mag = Math.min(1, dirLen);   // 触屏推力大小 → 速度；键盘恒为满速
+    starbit.walk = Math.min(1, starbit.walk + dt*4);
+    const speed = 230;
+    starbit.vx = ux*speed*mag; starbit.vy = uy*speed*mag;
+  } else {
+    starbit.walk = Math.max(0, starbit.walk - dt*4);
+    starbit.vx = 0; starbit.vy = 0;
+  }
   starbit.x += starbit.vx*dt;
   starbit.y += starbit.vy*dt;
   if(ax>0.1) starbit.face = 1; else if(ax<-0.1) starbit.face = -1;
@@ -534,6 +604,7 @@ function updatePlay(dt, freeRoam){
     const d = dist(starbit.x, starbit.y, so.x, so.y);
     if(d < 150){ detect = true; game.near = (d<90)? so : game.near; }
   }
+  if(actionEl) actionEl.classList.toggle('hint', !!game.near);   // 靠近负能量源时按钮脉冲提示
   if(starbit.mischiefT > 0){ starbit.mischiefT -= dt; starbit.expr='mischief'; }
   else if(detect && starbit.walk<0.2) starbit.expr='detect';
   else if(starbit.walk<0.15 && (keys[' ']?false:true)) starbit.expr = (game.t - starbit.bob>3? 'sleepy':'standard');
