@@ -6,10 +6,13 @@
 <title>星际治愈者 · 星崽 — Chapter 1 原型</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#0c0c1a; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#06060f; }
   body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; color:#F5F0FF; }
   #wrap { position:relative; width:100%; height:100%; }
-  #game { display:block; width:100%; height:100%; background:radial-gradient(circle at 50% 30%, #2a2a5e 0%, #14142e 60%, #0c0c1a 100%); outline:none; touch-action:none; }
+  #game { display:block; width:100%; height:100%; background:radial-gradient(circle at 50% 30%, #1a1a4e 0%, #0c0c22 60%, #06060f 100%); outline:none; touch-action:none; }
+  /* CRT 扫描线（全屏霓虹街机感） */
+  #scanlines { position:absolute; inset:0; pointer-events:none; z-index:4; opacity:.55; mix-blend-mode:overlay;
+    background:repeating-linear-gradient(to bottom, rgba(255,255,255,.03) 0px, rgba(255,255,255,.03) 1px, rgba(0,0,0,0) 2px, rgba(0,0,0,0) 3px); }
   #brand { position:absolute; top:10px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; pointer-events:none; opacity:0; transition:opacity .4s; }
   #brand.on { opacity:0.85; }
   #brand .star { color:#00E5FF; }
@@ -45,7 +48,7 @@
   /* 开始遮罩：保证一定能点进去 */
   #startOverlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(10,10,26,.55); backdrop-filter:blur(2px); z-index:10; }
   #startOverlay .panel { text-align:center; padding:30px 40px; }
-  #startOverlay .big { font-size:34px; font-weight:bold; color:#F5F0FF; text-shadow:0 0 20px rgba(0,229,255,.4); }
+  #startOverlay .big { font-size:34px; font-weight:bold; color:#F5F0FF; letter-spacing:2px; text-shadow:0 0 18px rgba(0,229,255,.7), 0 0 40px rgba(255,45,120,.35); }
   #startOverlay .sub { font-size:14px; letter-spacing:3px; color:#00E5FF; margin-top:6px; }
   #startOverlay .desc { font-size:13px; color:rgba(245,240,255,.8); margin:18px auto 22px; max-width:420px; line-height:1.7; }
   #startBtn { font-size:18px; font-weight:bold; color:#0c0c1a; background:linear-gradient(90deg,#00E5FF,#FFD740); border:none; border-radius:30px; padding:14px 38px; cursor:pointer; box-shadow:0 6px 24px rgba(0,229,255,.4); transition:transform .1s; }
@@ -59,6 +62,7 @@
     <div id="brand"><span class="star">✦</span><span class="txt">STARBIT</span></div>
     <div class="hint-corner">WASD 移动 · 空格 吸收</div>
     <div id="loading">正在唤醒星崽…</div>
+    <div id="scanlines"></div>
     <div id="touchUI">
       <div id="joystick"><div id="knob"></div></div>
       <button id="actionBtn">吸收<br>✦</button>
@@ -110,6 +114,11 @@ function grayify(c){
   const l = 0.299*c[0] + 0.587*c[1] + 0.114*c[2];
   return [clamp(l*0.62 + 26, 0, 255), clamp(l*0.62 + 28, 0, 255), clamp(l*0.62 + 52, 0, 255)];
 }
+
+/* ---------- 霓虹混搭风格开关与发光辅助（仿 PAC·MAN 3D 的发光街机语言） ---------- */
+const NEON = true;
+function setGlow(color, blur){ ctx.shadowColor = color; ctx.shadowBlur = blur; }
+function clearGlow(){ ctx.shadowBlur = 0; }
 
 /* ---------- 极简音频（WebAudio，无外部资源） ---------- */
 const Audio2 = {
@@ -323,6 +332,7 @@ let moments = [];     // 美好瞬间
 let particles = [];
 
 let starbit, cam, game;
+let starbitTrail = [];   // 星崽移动光迹（霓虹拖尾）
 
 function buildLevel(){
   solids = [];
@@ -331,6 +341,7 @@ function buildLevel(){
   candies = [];
   moments = [];
   particles = [];
+  starbitTrail = [];
 
   // 墙体（仅作为边界，不单独画 solid，边界在移动里 clamp）
   // 办公桌（实体碰撞 + 可上色）
@@ -455,6 +466,18 @@ function drawStarbit(sx, sy, opt){
   const y = sy + bob;
   ctx.save();
 
+  // 移动光迹（霓虹拖尾）
+  if(NEON && starbitTrail.length){
+    for(let i=0;i<starbitTrail.length;i++){
+      const p = starbitTrail[i];
+      const f = (i+1)/starbitTrail.length;
+      const a = Math.max(0, 0.22*f - (game.t - p.t)*0.04);
+      if(a<=0) continue;
+      ctx.fillStyle = rgbaStr(COL.cyan, a);
+      ctx.beginPath(); ctx.arc(p.x, p.y + Math.sin(game.t*6)*2, 9*f, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
   // ===== 表情状态参数 =====
   let exprScale = 1.0;
   let glowColor = COL.cyan;
@@ -498,12 +521,15 @@ function drawStarbit(sx, sy, opt){
     const dh = SB_BASE_H * exprScale;
     ctx.translate(sx + lean * 0.8, y);
     ctx.rotate(tiltAngle + lean * 0.003);
+    if(NEON) setGlow(glowColor, 22);
     ctx.drawImage(starbitImg, -dw/2, -dh, dw, dh);
+    if(NEON) clearGlow();
   } else {
     // ===== 图片未加载时的回退占位符 =====
     ctx.translate(sx + lean, y);
     const s = 40 * exprScale;
     // 身体
+    if(NEON) setGlow(COL.cyan, 16);
     ctx.fillStyle = rgbStr(hexToRgb(COL.nebula));
     roundRect(-s*0.55, -s*0.35, s*1.1, s*0.85, s*0.28); ctx.fill();
     // 头
@@ -521,6 +547,7 @@ function drawStarbit(sx, sy, opt){
     ctx.fillText('✦', s*0.28, -s*0.55);
   }
 
+  if(NEON) clearGlow();
   ctx.restore();
 }
 
@@ -619,6 +646,16 @@ function updatePlay(dt, freeRoam){
     if(d < starbit.r){
       const push = starbit.r - d;
       starbit.x += (dx/d)*push; starbit.y += (dy/d)*push;
+    }
+  }
+
+  // 移动光迹记录
+  if(NEON){
+    if(Math.hypot(starbit.vx, starbit.vy) > 6){
+      starbitTrail.push({x:starbit.x, y:starbit.y, t:game.t});
+      if(starbitTrail.length > 16) starbitTrail.shift();
+    } else if(starbitTrail.length){
+      starbitTrail.shift();
     }
   }
 
@@ -818,6 +855,38 @@ function updateParticles(dt){
   particles = particles.filter(p=>p.life>0);
 }
 
+/* ---------- 霓虹混搭风格：发光网格 / 暗角辉光 ---------- */
+function drawNeonGrid(){
+  if(!NEON) return;
+  ctx.save();
+  ctx.strokeStyle = rgbaStr(COL.cyan, 0.06);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for(let gx=0; gx<=ROOM.w; gx+=80){ ctx.moveTo(gx,0); ctx.lineTo(gx,ROOM.h); }
+  for(let gy=0; gy<=ROOM.h; gy+=80){ ctx.moveTo(0,gy); ctx.lineTo(ROOM.w,gy); }
+  ctx.stroke();
+  ctx.fillStyle = rgbaStr(COL.cyan, 0.10);
+  for(let gx=0; gx<=ROOM.w; gx+=160){
+    for(let gy=0; gy<=ROOM.h; gy+=160){ ctx.fillRect(gx-1, gy-1, 2, 2); }
+  }
+  ctx.restore();
+}
+function drawNeonVignette(){
+  if(!NEON) return;
+  let g = ctx.createRadialGradient(W/2, H+120, 60, W/2, H+120, H*0.9);
+  g.addColorStop(0, rgbaStr(COL.cyan, 0.12));
+  g.addColorStop(1, rgbaStr(COL.cyan, 0));
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  g = ctx.createRadialGradient(W/2, -120, 60, W/2, -120, H*0.7);
+  g.addColorStop(0, rgbaStr(COL.pink, 0.10));
+  g.addColorStop(1, rgbaStr(COL.pink, 0));
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  g = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.35, W/2, H/2, Math.max(W,H)*0.75);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, 'rgba(0,0,0,0.45)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+}
+
 /* ---------- 渲染：场景 ---------- */
 function drawWorld(){
   ctx.save();
@@ -849,6 +918,8 @@ function drawWorld(){
     ctx.fillRect(0,0,ROOM.w,110); // 顶墙（含窗）
     ctx.fillRect(0,0,40,ROOM.h); ctx.fillRect(ROOM.w-40,0,40,ROOM.h);
   }
+
+  drawNeonGrid();
 
   // 家具（使用场景图时跳过，避免与背景图重复）
   if(!HAS_BG) for(const f of furn){
@@ -942,13 +1013,29 @@ function drawWorld(){
     }
   }
 
+  // 负能量源：霓虹光环（仿街机发光球）
+  if(NEON){
+    for(const so of sources){
+      if(so.absorbed) continue;
+      const fl = 0.5 + 0.5*Math.sin(game.t*4);
+      ctx.save();
+      setGlow(COL.pink, 18);
+      ctx.strokeStyle = rgbaStr(COL.pink, 0.45 + 0.3*fl);
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(so.x, so.y-6, 42 + 4*fl, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // 星星糖
   for(const c of candies){
     if(c.got) continue;
     const pulse = 1+0.15*Math.sin(game.t*4+c.t);
     ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(game.t*0.8);
+    if(NEON) setGlow(COL.yellow, 12);
     starPath(0,0,12*pulse,0); ctx.fillStyle = COL.yellow; ctx.fill();
     ctx.fillStyle = rgbStr(hexToRgb(COL.white),0.9); ctx.beginPath(); ctx.arc(0,0,3,0,Math.PI*2); ctx.fill();
+    if(NEON) clearGlow();
     ctx.restore();
   }
 
@@ -997,12 +1084,31 @@ function drawHUD(){
   drawEye(cx-40, ey, leftOpt.size, leftOpt);
   drawEye(cx+40, ey, rightOpt.size, rightOpt);
 
-  // 左下：能量（瞳孔即 UI，这里仅做轻量文字辅助）
-  ctx.fillStyle = rgbStr(hexToRgb(COL.white), 0.85);
+  // 左下：霓虹能量条
+  if(NEON){
+    const bx=18, by=H-58, bw=190, bh=12;
+    ctx.save();
+    setGlow(COL.cyan, 10);
+    ctx.strokeStyle = rgbaStr(COL.cyan, 0.85); ctx.lineWidth=1.5;
+    roundRect(bx, by, bw, bh, 6); ctx.stroke();
+    const fw = bw * (game.energy/100);
+    if(fw>2){
+      const g = ctx.createLinearGradient(bx, 0, bx+bw, 0);
+      g.addColorStop(0, COL.cyan); g.addColorStop(1, COL.pink);
+      ctx.fillStyle = g; roundRect(bx, by, fw, bh, 6); ctx.fill();
+    }
+    clearGlow();
+    ctx.restore();
+  }
+  // 左下：能量与进度（霓虹发光字）
+  ctx.save();
+  if(NEON) setGlow(COL.cyan, 6);
+  ctx.fillStyle = rgbStr(hexToRgb(COL.white), 0.9);
   ctx.font = '13px sans-serif'; ctx.textAlign='left';
-  ctx.fillText('快乐能量 '+game.energy+'/100', 18, H-22);
+  ctx.fillText('快乐能量 '+game.energy+'/100', 18, H-24);
   const got = sources.filter(s=>s.absorbed).length;
-  ctx.fillText('负能量源 '+got+'/3   星星糖 '+candies.filter(c=>c.got).length+'/5', 18, H-42);
+  ctx.fillText('负能量源 '+got+'/3   星星糖 '+candies.filter(c=>c.got).length+'/5', 18, H-40);
+  ctx.restore();
   ctx.textAlign='left';
 
   // 底部提示
@@ -1035,7 +1141,9 @@ function drawAbsorb(){
   const pw=420, ph=240, bx=px-pw/2, by=py-ph/2;
   ctx.fillStyle = rgbStr(hexToRgb('#1d1d40'), 0.95);
   roundRect(bx,by,pw,ph,16); ctx.fill();
+  if(NEON) setGlow(COL.cyan, 16);
   ctx.strokeStyle = COL.cyan; ctx.lineWidth=2; roundRect(bx,by,pw,ph,16); ctx.stroke();
+  if(NEON) clearGlow();
 
   ctx.fillStyle = COL.white; ctx.font='bold 18px sans-serif'; ctx.textAlign='center';
   ctx.fillText('吸收「'+so.name+'」', px, by+34);
@@ -1082,6 +1190,18 @@ function drawTitle(){
   // 星点
   ctx.fillStyle = rgbStr(hexToRgb(COL.white),0.5);
   for(let i=0;i<60;i++){ const x=(i*97)%W, y=(i*53)%H; ctx.fillRect(x,y,2,2); }
+  // 霓虹地平线网格（屏幕底部，仿街机透视地面）
+  if(NEON){
+    ctx.save();
+    ctx.strokeStyle = rgbaStr(COL.cyan, 0.18); ctx.lineWidth = 1;
+    const horizon = H*0.86, vpx = W/2;
+    ctx.beginPath();
+    for(let i=-10;i<=10;i++){ ctx.moveTo(vpx, horizon); ctx.lineTo(vpx + i*W*0.12, H); }
+    for(let j=0;j<6;j++){ const y=horizon + (H-horizon)*(j/6); ctx.moveTo(0,y); ctx.lineTo(W,y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // 动画星崽（AI 生成的待机动画）作为主视觉
   const vx=cx, vy=H*0.30, vs=190;
   if(charVideoReady && charVideo.readyState>=2){
@@ -1104,8 +1224,10 @@ function drawTitle(){
   }
 
   ctx.textAlign='center';
+  if(NEON) setGlow(COL.cyan, 24);
   ctx.fillStyle = COL.white; ctx.font='bold 40px sans-serif';
   ctx.fillText('星际治愈者 · 星崽', cx, H*0.52);
+  if(NEON) clearGlow();
   ctx.fillStyle = rgbStr(hexToRgb(COL.cyan)); ctx.font='16px sans-serif';
   ctx.fillText('STARBIT · Glimmer in the Dark', cx, H*0.52+28);
   ctx.fillStyle = rgbStr(hexToRgb(COL.white),0.85); ctx.font='15px sans-serif';
@@ -1128,6 +1250,7 @@ function render(){
   if(game.state==='title'){ drawTitle(); return; }
 
   drawWorld();
+  drawNeonVignette();
   drawHUD();
 
   if(game.state==='absorb') drawAbsorb();
